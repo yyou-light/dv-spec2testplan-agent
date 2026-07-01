@@ -1,40 +1,91 @@
-# 🚀 DV AI Agent: 智能数字 IC 验证计划提取引擎
+# DV Spec2Testplan Agent
 
-基于大语言模型 (LLM) 和 Maker-Checker 多智能体架构的 Spec 解析工具。
+DV Spec2Testplan Agent 是一个面向数字 IC 验证工作的 Spec 解析工具。它读取 Markdown 格式的硬件规范，调用大模型提取验证测试点，并导出结构化 CSV。
 
-## ✨ 核心特性
-* **零漏测闭环 (Critic 机制)**：提取后自动进行逆向原文比对，确保没有任何一句硬件行为被遗漏。
-* **外挂验证大脑**：纯 Markdown 管理 `skills`，可无限扩充 AXI/SRAM 等协议的隐式推导经验。
-* **二义性雷达**：不仅提取功能，更能前置扫描 Spec 中的逻辑矛盾与时序模糊点。
+项目采用 Maker-Checker 流程：
 
-## 🛠️ 快速上手
-1. 克隆代码库：`git clone ...`
-2. 安装依赖：`pip install -r requirements.txt`
-3. 配置密钥：将 `.env.example` 重命名为 `.env`，填入你的大模型 API Key。
-4. 一键运行：`python planner.py`，根据交互提示放入你的 Markdown 规范文档即可！
+- Maker 从 Spec 中提取测试点。
+- Critic 可选开启，用于检查是否存在漏测。
+- Cluster 将测试点按接口、功能、场景、异常、上报、corner 等维度归类。
+- Skills 根据 AXI、SRAM、反压等关键词注入验证经验。
 
-## 📂 目录结构
-* `planner.py` - 主控中枢与交互入口
-* `extractor.py` - 核心提取大模型 (Maker)
-* `critic.py` - 防漏测审计大模型 (Checker)
-* `prompts/skills/` - 💡 验证经验知识库，欢迎团队成员提交 PR 补充协议规范！
+## 兼容性说明
 
-## 🧠Skills 动态技能库详解
-我们的提取引擎 (Extractor) 底层由 4 层 Prompt 组装而成：
-* **[Layer 1] Meta (元指令)**：确立 AI 验证架构师的顶层角色与严谨扫雷纪律。
-* **[Layer 2] Base (基石规则)**：全局通用验证准则（如复位检查）与系统级 Top-Down 场景推演强制令。
-* **[Layer 3] Skills (动态技能层) **：**本项目核心护城河**。系统会利用正则引擎扫描当前文档块，一旦命中预设的 `keywords`，便会自动将对应的专家考纲“热插拔”注入到当前 Prompt 中。
-* **[Layer 4] Schema (结构约束)**：由 Pydantic 动态生成的 JSON 格式铁律。
+默认运行方式保持原版行为：使用用户提供的 OpenAI-compatible API Key。已有用户继续按原方式配置 `.env` 即可。
 
-### 2. 显式规则与隐式特权 (Explicit vs Implicit)
+Codex CLI 后端是可选能力。只有显式传入 `--backend codex`，或在 `.env` 中设置 `DV_LLM_BACKEND="codex"`，才会使用本机 Codex/ChatGPT 账号额度。
 
-在定义一个新技能（如 `axi.md`）时，我们将其严格划分为两个行为边界区，从而完美平衡“防漏测”与“AI幻觉”：
+## 快速开始
 
-####  `# explicit_rules` (显式规则：白纸黑字的契约)
-* **定位**：用于防粗心。
-* **机制**：要求 AI 必须在原文中找到**明确的逻辑描述**（如“AXI 边界报错”）。所见即所得，并且必须一字不差地提取原文作为 `spec_quote` 反标。
+安装依赖：
 
-#### ️ `# implicit_rules` (隐式规则：资深老兵的脑补特权)
-* **定位**：用于防死板。赋予 AI 专家级的联想能力。
-* **机制**：这是系统级的**最高豁免授权**。只要原文出现了相关触发词（如 `ready`、`fifo_full`），哪怕 Spec 中没有写明具体的测试要求，AI 也**必须**“无中生有”地脑补出极端场景（如“随机长反压测试”）。
-* **审计豁免**：对于隐式规则提取出的点，后置的 Critic (找茬审计员) 会给予特权放行，绝不会将其误杀为“幻觉”。
+```powershell
+pip install -r requirements.txt
+```
+
+复制配置文件：
+
+```powershell
+copy .env.example .env
+```
+
+默认 API 模式配置：
+
+```env
+DV_LLM_API_KEY="your_api_key_here"
+DV_LLM_BASE_URL="https://api.deepseek.com"
+DV_LLM_MODEL_NAME="deepseek-chat"
+```
+
+交互式运行：
+
+```powershell
+python planner.py
+```
+
+命令行运行：
+
+```powershell
+python planner.py --input example_spec.md --output out.csv --audit
+```
+
+使用 Codex CLI 后端：
+
+```powershell
+python planner.py --backend codex --input example_spec.md --output out.csv --no-audit
+```
+
+## 用户手册
+
+完整说明见 [docs/USER_MANUAL.md](docs/USER_MANUAL.md)，包括：
+
+- 安装与配置
+- API 模式和 Codex CLI 模式
+- 命令行参数
+- CSV 输出列说明
+- Skills 扩展方式
+- 常见问题处理
+- 结果质量检查建议
+
+## 主要文件
+
+- `planner.py`：主入口，负责切块规划、提取闭环、建树和 CSV 导出。
+- `codex_client.py`：可选 Codex CLI 后端，提供 OpenAI chat 兼容包装。
+- `extractor.py`：Maker，负责测试点提取。
+- `critic.py`：Checker，负责漏测审计。
+- `cluster.py`：标签归类和测试点树构建。
+- `chunker.py`：根据切块规划执行 Markdown 物理切块。
+- `schemas.py`：Pydantic 数据结构约束。
+- `prompts/`：Prompt 分层配置。
+- `prompts/skills/`：协议和验证经验技能库。
+- `AI_HANDOFF.md`：给后续 AI 或维护者的交接说明。
+
+## 验证命令
+
+```powershell
+python -m compileall -q planner.py codex_client.py extractor.py cluster.py critic.py schemas.py chunker.py
+```
+
+## 维护原则
+
+不要为了适配某个模型修改原版 Prompt、Schema 或测试点生成语义。当前 Codex CLI 能稳定输出可用结果的前提，是保留原版生成逻辑，只替换调用通道。

@@ -4,6 +4,7 @@ import sys
 import json
 import csv
 import datetime
+import argparse
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -12,6 +13,7 @@ from schemas import SemanticChunkingPlan
 from extractor import extract_testpoints_from_chunk
 from cluster import generate_tag_mapping, build_testpoint_tree
 from critic import audit_extracted_testpoints
+from codex_client import CodexChatClient
 
 try:
     sys.stdout.reconfigure(encoding='utf-8')
@@ -20,26 +22,56 @@ except AttributeError:
 # =====================================================================
 # ⚙️ [全局大模型配置区] - 绝对安全的安全脱敏机制
 # =====================================================================
-# 加载当前目录下的 .env 文件
-load_dotenv()
-
-# 从环境变量中读取，绝不硬编码在代码里！
-LLM_API_KEY = os.getenv("DV_LLM_API_KEY")
-# 如果 .env 没写 BASE_URL，默认回退到 deepseek 官方 API
-LLM_BASE_URL = os.getenv("DV_LLM_BASE_URL", "https://api.deepseek.com") 
 LLM_MODEL_NAME = "deepseek-chat"
 
-if not LLM_API_KEY:
-    print("❌ 致命错误: 未检测到 DV_LLM_API_KEY 环境变量！")
-    print("💡 解决方案: 请在当前目录下新建一个 '.env' 文件，并写入：DV_LLM_API_KEY=你的真实Key")
-    sys.exit(1)
-
-client = OpenAI(
-    api_key=LLM_API_KEY,
-    base_url=LLM_BASE_URL
-)
-
 MAX_RETRY = 2 # 如果被打回，最多重修次数
+
+def build_llm_client():
+    global LLM_MODEL_NAME
+
+    # 加载当前目录下的 .env 文件
+    load_dotenv()
+
+    backend = os.getenv("DV_LLM_BACKEND", "openai").strip().lower()
+    if backend == "codex":
+        codex_model = os.getenv("DV_CODEX_MODEL") or "gpt-5.5"
+        LLM_MODEL_NAME = codex_model
+        return CodexChatClient(
+            codex_exe=os.getenv("DV_CODEX_EXE") or None,
+            cwd=os.getcwd(),
+            model_name=codex_model,
+            sandbox=os.getenv("DV_CODEX_SANDBOX", "read-only"),
+            timeout_sec=int(os.getenv("DV_CODEX_TIMEOUT_SEC", "1800")),
+            ignore_user_config=os.getenv("DV_CODEX_IGNORE_USER_CONFIG", "1") != "0",
+        )
+
+    if backend != "openai":
+        print(f"❌ 致命错误: 未知 DV_LLM_BACKEND={backend}，支持 codex/openai")
+        sys.exit(1)
+
+    LLM_MODEL_NAME = os.getenv("DV_LLM_MODEL_NAME", "deepseek-chat")
+
+    # 从环境变量中读取，绝不硬编码在代码里！
+    llm_api_key = os.getenv("DV_LLM_API_KEY")
+    if not llm_api_key:
+        print("❌ 致命错误: 未检测到 DV_LLM_API_KEY 环境变量！")
+        print("💡 解决方案: 请在当前目录下新建一个 '.env' 文件，并写入：DV_LLM_API_KEY=你的真实Key")
+        sys.exit(1)
+
+    return OpenAI(
+        api_key=llm_api_key,
+        base_url=os.getenv("DV_LLM_BASE_URL", "https://api.deepseek.com")
+    )
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="DV Spec2Testplan Agent")
+    parser.add_argument("-i", "--input", help="待解析的 Spec Markdown 文档路径")
+    parser.add_argument("-o", "--output", help="输出 CSV 路径；不指定时自动生成")
+    parser.add_argument("--backend", choices=["openai", "codex"], help="大模型后端；默认 openai，使用原版 API 配置")
+    audit_group = parser.add_mutually_exclusive_group()
+    audit_group.add_argument("--audit", dest="audit", action="store_const", const=True, default=None, help="开启 Critic 审计")
+    audit_group.add_argument("--no-audit", dest="audit", action="store_const", const=False, help="关闭 Critic 审计")
+    return parser.parse_args()
 
 # =====================================================================
 # 1. 预处理：纯 Python 提取目录 (TOC) 和前言
@@ -101,25 +133,33 @@ def generate_chunking_plan(intro_text: str, toc_string: str) -> SemanticChunking
 # 3. 🚀 主执行入口 (交互式向导)
 # =====================================================================
 if __name__ == "__main__":
+    args = parse_args()
+    if args.backend:
+        os.environ["DV_LLM_BACKEND"] = args.backend
+
     print("\n======================================================")
     print("🚀 欢迎使用 DV AI Agent (智能验证计划提取引擎) v0.1")
     print("======================================================")
+    client = build_llm_client()
     
     # --- 交互式获取参数 ---
-    raw_input = input("📂 请输入待解析的 Spec 文档路径 (支持拖拽文件到窗口): ").strip()
+    raw_input = args.input or input("📂 请输入待解析的 Spec 文档路径 (支持拖拽文件到窗口): ").strip()
     input_path = raw_input.strip("'").strip('"') # 强力清洗终端自带的引号
     
     if not os.path.exists(input_path):
         print(f"\n❌ 致命错误: 找不到文件 '{input_path}'，请检查路径是否正确！")
         sys.exit(1)
         
-    audit_choice = input("🕵️ 是否开启 Critic 审计闭环 (耗时较长，但防漏测)? [Y/n 默认开启]: ").strip().lower()
-    ENABLE_CRITIC_AUDIT = (audit_choice != 'n')
+    if args.audit is None:
+        audit_choice = input("🕵️ 是否开启 Critic 审计闭环 (耗时较长，但防漏测)? [Y/n 默认开启]: ").strip().lower()
+        ENABLE_CRITIC_AUDIT = (audit_choice != 'n')
+    else:
+        ENABLE_CRITIC_AUDIT = args.audit
     
     # 🌟 自动生成完美的文件名: DV_Testplan_源文件名_月日_时分.csv
     base_name = os.path.splitext(os.path.basename(input_path))[0]
     timestamp = datetime.datetime.now().strftime("%m%d_%H%M")
-    output_file = f"DV_Testplan_{base_name}_{timestamp}.csv"
+    output_file = args.output or f"DV_Testplan_{base_name}_{timestamp}.csv"
     
     print(f"\n⚙️ 配置完成！")
     print(f"   - 输入文档: {input_path}")
