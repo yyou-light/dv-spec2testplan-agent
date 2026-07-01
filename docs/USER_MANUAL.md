@@ -1,47 +1,129 @@
 # 用户手册
 
-本文面向使用者说明如何安装、配置、运行 DV Spec2Testplan Agent，以及如何检查输出结果。
+这份手册面向两类用户：
 
-## 1. 工具用途
+- 使用者：拿一份 Markdown Spec，生成测试点 CSV。
+- 验证知识维护者：维护 `prompts/skills/`，让工具更懂团队的协议、接口和验证经验。
 
-DV Spec2Testplan Agent 用于将 Markdown 格式的硬件 Spec 转换为验证测试点列表。典型输入是一份模块级或子系统级设计规范，典型输出是一份 CSV 文件，供验证计划评审、用例拆分或后续自动化流程使用。
+如果你只是运行工具，先看第 1、2、4、5、6 节。如果你要理解项目基本架构或维护测试点生成质量，重点看第 3、7、8 节。
 
-工具适合以下场景：
+## 1. 这个项目做什么
 
-- 从设计规范中快速提取初版 DV testplan。
-- 检查 Spec 中是否存在漏测风险。
-- 标注条件缺失、时序不清或描述矛盾的地方。
-- 基于 AXI、SRAM、反压等协议经验补充隐式验证点。
+DV Spec2Testplan Agent 用来把硬件 Spec 转成验证测试点列表。
 
-工具不替代人工评审。它生成的是测试计划草案，仍需要验证工程师确认优先级、场景完整性和二义性标注。
+输入：
 
-## 2. 运行环境
+- Markdown 格式 Spec，例如 `example_spec.md`。
 
-需要 Python 和项目依赖：
+输出：
+
+- CSV 测试点表，包含分类、优先级、测试点摘要、详细描述、原文反标和二义性说明。
+
+它适合生成初版 DV testplan，但不替代人工评审。验证工程师仍需要检查测试点是否有价值、是否覆盖完整、是否存在重复或误判。
+
+## 2. 用户视角的项目结构
+
+你通常只需要关心这几类文件：
+
+| 你要做的事 | 主要看哪里 |
+| --- | --- |
+| 配置模型 | `.env`、`.env.example` |
+| 运行工具 | `planner.py` |
+| 准备输入 | `example_spec.md` 或自己的 Markdown Spec |
+| 查看输出 | 生成的 `*.csv` |
+| 维护验证经验 | `prompts/skills/*.md` |
+| 调整全局提取纪律 | `prompts/layer1_meta.md`、`prompts/layer2_base.md` |
+| 理解用户操作 | `README.md`、`docs/USER_MANUAL.md` |
+| 交接给 AI/维护者 | `AI_HANDOFF.md` |
+
+项目内部处理流程如下：
+
+```mermaid
+flowchart TD
+    A["Markdown Spec"] --> B["planner.py"]
+    B --> C["提取目录和前言"]
+    C --> D["LLM 生成切块计划"]
+    D --> E["chunker.py 物理切块"]
+    E --> F["extractor.py / Maker 提取测试点"]
+    F --> G{"是否开启 --audit"}
+    G -- 是 --> H["critic.py / Critic 查漏"]
+    H --> F
+    G -- 否 --> I["cluster.py 标签归类"]
+    H --> I
+    I --> J["导出 CSV"]
+    K["prompts/skills/*.md"] --> F
+```
+
+从用户角度看，`prompts/skills/` 是最重要的可维护部分。它决定模型在看到 AXI、SRAM、ready、反压等关键词时，会额外带上哪些验证经验。
+
+## 3. 项目基本架构
+
+### 3.1 Planner
+
+入口文件是 `planner.py`。它负责：
+
+- 读取 Spec。
+- 提取目录和前言。
+- 调用大模型生成切块计划。
+- 调用 Maker/Critic/Cluster。
+- 导出 CSV。
+
+普通用户不需要改它，只需要运行它。
+
+### 3.2 Backend
+
+当前有两个后端：
+
+- 默认后端：OpenAI-compatible API。老用户继续使用 `.env` 中的 API Key。
+- 可选后端：Codex CLI。显式使用 `--backend codex` 时才启用。
+
+后端只负责“怎么调用模型”，不应该改变测试点生成逻辑。
+
+### 3.3 Maker
+
+`extractor.py` 是 Maker，负责从每个文档块中提取测试点。它会组合四层 Prompt：
+
+- `prompts/layer1_meta.md`：全局角色和提取纪律。
+- `prompts/layer2_base.md`：通用验证原则和场景推演要求。
+- `prompts/skills/*.md`：按关键词动态挂载的协议经验。
+- `schemas.py`：输出 JSON 结构要求。
+
+### 3.4 Critic
+
+`critic.py` 是可选审计器。开启 `--audit` 后，它会检查 Maker 是否漏掉了原文中的硬件行为。
+
+正式评审前建议开启。快速试跑可以关闭。
+
+### 3.5 Cluster
+
+`cluster.py` 负责把测试点的原始标签归类成树状目录，例如：
+
+- 接口类
+- 功能类
+- 场景类
+- 异常类
+- 上报类
+- corner类
+
+## 4. 安装和配置
+
+安装依赖：
 
 ```powershell
 pip install -r requirements.txt
 ```
 
-当前依赖：
-
-- `openai>=1.0.0`
-- `pydantic>=2.0.0`
-- `python-dotenv>=1.0.0`
-
-如果使用 Codex CLI 后端，还需要本机已安装并登录 Codex。
-
-## 3. 配置方式
-
-### 3.1 默认 API 模式
-
-默认模式保持原版行为，使用 OpenAI-compatible API。复制配置文件：
+复制配置：
 
 ```powershell
 copy .env.example .env
 ```
 
-填写：
+### 4.1 默认 API 模式
+
+默认模式保持原版行为，使用用户提供的 OpenAI-compatible API Key。
+
+`.env` 示例：
 
 ```env
 DV_LLM_API_KEY="your_api_key_here"
@@ -49,17 +131,11 @@ DV_LLM_BASE_URL="https://api.deepseek.com"
 DV_LLM_MODEL_NAME="deepseek-chat"
 ```
 
-说明：
+### 4.2 可选 Codex CLI 模式
 
-- `DV_LLM_API_KEY`：用户自己的 API Key。
-- `DV_LLM_BASE_URL`：OpenAI-compatible 服务地址。
-- `DV_LLM_MODEL_NAME`：模型名称，默认建议保持 `deepseek-chat`。
+Codex CLI 模式用于不外接 API、改用本机 Codex/ChatGPT 会员额度的场景。
 
-### 3.2 可选 Codex CLI 模式
-
-Codex CLI 模式用于不外接 API、改用当前用户本机 Codex/ChatGPT 会员额度的场景。
-
-一次性使用：
+一次性运行时直接加参数：
 
 ```powershell
 python planner.py --backend codex --input example_spec.md --output out.csv --no-audit
@@ -75,25 +151,17 @@ DV_CODEX_TIMEOUT_SEC="1800"
 DV_CODEX_IGNORE_USER_CONFIG="1"
 ```
 
-可选指定 Codex 可执行文件路径：
+Codex CLI 不是默认模式，避免影响已有 API 用户，也避免无意消耗用户自己的 Codex 额度。
 
-```env
-DV_CODEX_EXE="C:\\Users\\yyou\\AppData\\Local\\OpenAI\\Codex\\bin\\codex.exe"
-```
+## 5. 怎么运行
 
-注意：Codex CLI 不是默认模式，避免影响已有 API 用户，也避免无意消耗用户 Codex 额度。
-
-## 4. 运行方式
-
-### 4.1 交互式运行
+交互式运行：
 
 ```powershell
 python planner.py
 ```
 
-程序会提示输入 Spec 路径，并询问是否开启 Critic 审计。
-
-### 4.2 命令行运行
+命令行运行：
 
 ```powershell
 python planner.py --input example_spec.md --output out.csv --audit
@@ -112,74 +180,215 @@ python planner.py --input example_spec.md --output out.csv --audit
 
 建议：
 
-- 快速试跑时使用 `--no-audit`。
-- 正式评审前使用 `--audit`。
-- 大文档运行时间较长，建议明确指定 `--output`，避免重复运行后找不到产物。
+- 快速验证链路：`--no-audit`
+- 正式生成：`--audit`
+- 大文档或多人协作：显式指定 `--output`
 
-## 5. 处理流程
+## 6. 输出 CSV 怎么看
 
-工具内部流程如下：
-
-1. 读取 Markdown Spec。
-2. 提取目录和前言信息。
-3. 生成全局上下文和语义切块计划。
-4. 按章节切分文档。
-5. Maker 按块提取测试点。
-6. 如果开启 `--audit`，Critic 检查漏测并触发补提。
-7. Cluster 将测试点标签归类为树状结构。
-8. 导出 CSV。
-
-## 6. CSV 输出说明
-
-输出文件使用 UTF-8 with BOM，便于 Excel 打开。
+输出文件使用 UTF-8 with BOM，通常可以直接用 Excel 打开。
 
 | 列名 | 说明 |
 | --- | --- |
 | `测试点编号` | 自动生成的树状编号 |
 | `一级分类` | 接口类、功能类、场景类、异常类、上报类、corner类等 |
-| `二级分类` | 由模型根据 raw tag 聚合得到的子类 |
+| `二级分类` | 测试点子类 |
 | `优先级` | `P0`、`P1`、`P2` |
-| `特征标签` | 原始测试点标签 |
-| `测试点摘要` | 一句话说明测试目的 |
-| `详细描述` | 测试行为、观察点或期望结果描述 |
+| `特征标签` | Maker 提取的原始标签 |
+| `测试点摘要` | 一句话测试目的 |
+| `详细描述` | 测试行为、观察点或期望结果 |
 | `原文溯源` | 对应 Spec 原文，便于反查 |
 | `存疑` | Spec 可能存在二义性时标记 |
 | `缺陷/二义性说明` | 需要设计或架构澄清的问题 |
 
-## 7. Skills 扩展
+人工 review 时不要只看行数。更重要的是：
 
-协议经验位于 `prompts/skills/`。当前包含：
+- 测试点是否有明确验证意图。
+- 是否能反查到原文或明确的隐式规则。
+- 是否覆盖核心路径、异常路径、边界条件和真实使用场景。
+- “存疑”是否真的指向需要澄清的问题。
 
-- `axi.md`
-- `sram.md`
-- `backpressure.md`
+## 7. Skills 在哪里，怎么维护
 
-每个 skill 通常包含三部分：
+Skills 是用户最应该维护的部分。
 
-- `# keywords`：触发关键词。
-- `# explicit_rules`：原文明确写到时必须覆盖的规则。
-- `# implicit_rules`：基于验证经验应补充的隐式测试点。
+目录：
 
-新增 skill 时应保持规则具体、可验证，避免写成泛泛的建议。`implicit_rules` 应用于补充常见验证风险，不应替代 Spec 本身。
+```text
+prompts/skills/
+```
 
-## 8. 结果检查建议
+当前已有：
 
-人工 review 时建议关注：
+```text
+prompts/skills/axi.md
+prompts/skills/sram.md
+prompts/skills/backpressure.md
+```
 
-- 测试点是否能追溯到原文或明确的隐式规则。
-- P0 是否覆盖核心数据通路、复位、使能和基本读写。
-- 异常类是否覆盖非法 burst、越界、非对齐、关闭状态访问等。
-- 场景类是否覆盖反压、背靠背、并发、边界切换等组合行为。
-- “存疑”列是否真的指向需要澄清的问题。
-- 是否存在可接受的重复。少量重复通常比漏掉验证维度更安全。
+每个 skill 文件分三段：
 
-不要只用行数判断质量。更重要的是测试点是否有明确验证意图、覆盖范围是否合理、原文反标是否可信。
+```markdown
+# keywords
+触发这个 skill 的关键词
+
+# explicit_rules
+原文明确写到时必须提取的规则
+
+# implicit_rules
+即使原文没有直接写明，也应基于验证经验补充的测试点
+```
+
+### 7.1 keywords 怎么写
+
+`keywords` 用来决定当前文档块是否挂载这个 skill。
+
+示例：
+
+```markdown
+# keywords
+axi, awvalid, arvalid, wvalid, rvalid, bvalid, awready, wready
+```
+
+建议：
+
+- 写协议名、接口名、关键信号名。
+- 中英文都可以写。
+- 不要写过泛的词，例如 `data`、`valid`、`enable` 单独使用容易误触发。
+
+### 7.2 explicit_rules 怎么写
+
+`explicit_rules` 表示：如果 Spec 原文明确出现相关行为，必须提取测试点。
+
+适合写：
+
+- 协议限制。
+- 明确边界。
+- 明确错误响应。
+- 明确时序要求。
+
+示例：
+
+```markdown
+# explicit_rules
+1. 4KB 边界：如果原文描述 AXI burst 不允许跨越 4KB 边界，必须提取合法边界、跨界非法和错误响应测试点。
+2. 非对齐访问：如果原文描述地址必须 word 对齐，必须提取对齐访问和非对齐访问测试点。
+```
+
+不要写：
+
+- “需要充分测试 AXI”这类空话。
+- 没有触发条件、没有期望行为的泛泛建议。
+
+### 7.3 implicit_rules 怎么写
+
+`implicit_rules` 表示：只要文档块命中关键词，就允许模型根据验证经验补充测试点。
+
+适合写：
+
+- 反压。
+- 背靠背。
+- ID 覆盖。
+- 读写冲突。
+- 前门/后门一致性。
+- 长时间 stall 后恢复。
+
+示例：
+
+```markdown
+# implicit_rules
+1. 背靠背传输：当模块支持 AXI burst 或连续访问时，补充连续背靠背读写测试点。
+2. 通道反压：覆盖 AW/W/B/AR/R 各通道 ready 拉低和恢复后的数据不丢不重。
+3. AXI ID 覆盖：如果接口包含 ID，覆盖所有支持 ID 的读写事务。
+```
+
+注意：
+
+- `implicit_rules` 权力很大，会让模型“脑补”测试点。
+- 只写团队确实认可的验证经验。
+- 不要把不确定的设计假设写成隐式规则。
+
+### 7.4 新增一个 skill 的步骤
+
+假设要新增 FIFO 相关经验：
+
+1. 新建文件：
+
+```text
+prompts/skills/fifo.md
+```
+
+2. 写入结构：
+
+```markdown
+# keywords
+fifo, full, empty, almost_full, almost_empty
+
+# explicit_rules
+1. 如果原文定义 FIFO full 行为，必须提取写 full 边界和 full 后继续写的异常测试点。
+2. 如果原文定义 FIFO empty 行为，必须提取读 empty 边界和 empty 后继续读的异常测试点。
+
+# implicit_rules
+1. 指针回卷：覆盖读写指针接近最大值并回卷后的 full/empty 判断。
+2. 同拍读写：覆盖同一周期读写同时发生时的计数和数据顺序。
+```
+
+3. 用包含 FIFO 章节的 Spec 试跑：
+
+```powershell
+python planner.py --input your_fifo_spec.md --output fifo_testplan.csv --no-audit
+```
+
+4. 检查 CSV：
+
+- 是否出现 FIFO 相关测试点。
+- 是否有无意义脑补。
+- 原文反标是否能支撑测试点。
+
+5. 正式生成时再开启审计：
+
+```powershell
+python planner.py --input your_fifo_spec.md --output fifo_testplan_audit.csv --audit
+```
+
+### 7.5 修改 skill 后怎么判断有没有改好
+
+看三件事：
+
+- 命中是否正确：该触发时触发，不该触发时不触发。
+- 输出是否具体：测试点能看出测什么、为什么测。
+- 反标是否可信：显式规则来自原文，隐式规则至少能从当前上下文找到触发依据。
+
+不要用“输出越多越好”判断。skills 的目标是增加有效覆盖，不是制造行数。
+
+## 8. 哪些文件不建议普通用户改
+
+普通用户通常不要改：
+
+- `schemas.py`
+- `extractor.py`
+- `critic.py`
+- `cluster.py`
+- `chunker.py`
+- `codex_client.py`
+
+这些文件是程序逻辑。改动它们可能导致 JSON 解析失败、分类异常或输出质量下降。
+
+如果只是想让工具更懂某类协议，优先改 `prompts/skills/*.md`。
+
+如果只是想调整测试点提取风格，优先讨论 `prompts/layer1_meta.md` 和 `prompts/layer2_base.md`，不要直接改 Python 逻辑。
 
 ## 9. 常见问题
 
 ### 未检测到 `DV_LLM_API_KEY`
 
-默认后端是 API 模式。请复制 `.env.example` 为 `.env` 并填写 API Key，或显式使用 Codex CLI：
+默认后端是 API 模式。请检查 `.env` 是否存在，并填写：
+
+```env
+DV_LLM_API_KEY="your_api_key_here"
+```
+
+或者显式使用 Codex CLI：
 
 ```powershell
 python planner.py --backend codex --input example_spec.md --output out.csv --no-audit
@@ -187,7 +396,7 @@ python planner.py --backend codex --input example_spec.md --output out.csv --no-
 
 ### Codex CLI 提示模型不支持
 
-确认 `.env` 中的 `DV_CODEX_MODEL` 是当前账号可用的模型。当前验证过的配置是：
+确认 `.env` 中的 `DV_CODEX_MODEL` 是当前账号可用模型。当前验证过的配置是：
 
 ```env
 DV_CODEX_MODEL="gpt-5.5"
@@ -195,7 +404,7 @@ DV_CODEX_MODEL="gpt-5.5"
 
 ### 找不到 Codex CLI
 
-确认 Codex 已安装并登录。必要时在 `.env` 中指定：
+确认 Codex 已安装并登录。必要时指定路径：
 
 ```env
 DV_CODEX_EXE="C:\\Users\\yyou\\AppData\\Local\\OpenAI\\Codex\\bin\\codex.exe"
@@ -205,32 +414,24 @@ DV_CODEX_EXE="C:\\Users\\yyou\\AppData\\Local\\OpenAI\\Codex\\bin\\codex.exe"
 
 关闭正在打开的 CSV 后重试。程序遇到权限问题时会尝试生成备用文件名。
 
-### 控制台中文显示乱码
+### 控制台中文乱码
 
 通常是 Windows 控制台编码问题，不代表 CSV 文件损坏。CSV 使用 `utf-8-sig` 写入，Excel 通常可以正常识别。
 
-### 输出为空或格式校验失败
+## 10. 推荐工作流
 
-可能原因：
+维护一个协议 skill 时，建议按这个顺序：
 
-- 输入 Spec 内容过短或目录结构不完整。
-- 模型输出不是合法 JSON。
-- Prompt 中的 schema 约束未被模型遵守。
+1. 先用当前 skill 跑示例 Spec，保存 CSV。
+2. 修改 `prompts/skills/*.md`。
+3. 用同一个 Spec 再跑一次。
+4. 对比新增、减少和变化的测试点。
+5. 只保留能提升有效覆盖的规则。
+6. 正式输出前开启 `--audit`。
 
-建议先关闭审计，用示例文件验证基础链路：
+这套工具的质量主要来自两点：
 
-```powershell
-python planner.py --input example_spec.md --output smoke.csv --no-audit
-```
+- Spec 原文是否写清楚。
+- skills 是否沉淀了真实验证经验。
 
-## 10. 维护边界
-
-当前高质量输出依赖原版生成逻辑。后续维护应优先改进运行稳定性、文档、日志和错误提示，不应随意改动：
-
-- `prompts/layer1_meta.md`
-- `prompts/layer2_base.md`
-- `prompts/skills/`
-- `schemas.py`
-- `extractor.py` 中的测试点生成规则
-
-如果必须优化生成质量，应先准备人工认可的 golden 输出，再做 A/B 对比。
+维护 skills 时要克制。具体、可验证、能指导测试的规则才应该进入知识库。

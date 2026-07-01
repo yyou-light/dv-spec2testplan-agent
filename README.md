@@ -60,12 +60,15 @@ python planner.py --backend codex --input example_spec.md --output out.csv --no-
 完整说明见 [docs/USER_MANUAL.md](docs/USER_MANUAL.md)，包括：
 
 - 安装与配置
+- 项目基本架构
 - API 模式和 Codex CLI 模式
 - 命令行参数
 - CSV 输出列说明
 - Skills 扩展方式
 - 常见问题处理
 - 结果质量检查建议
+
+用户最常维护的是 `prompts/skills/`。如果要让工具更懂某类协议或接口，不要先改 Python 代码，优先维护对应 skill 文件。手册里的 [Skills 在哪里，怎么维护](docs/USER_MANUAL.md#7-skills-在哪里怎么维护) 说明了文件结构、规则写法和验证流程。
 
 ## 主要文件
 
