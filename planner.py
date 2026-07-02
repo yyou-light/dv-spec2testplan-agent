@@ -14,6 +14,7 @@ from extractor import extract_testpoints_from_chunk
 from cluster import generate_tag_mapping, build_testpoint_tree
 from critic import audit_extracted_testpoints
 from codex_client import CodexChatClient
+from spec_loader import load_spec_as_markdown
 
 try:
     sys.stdout.reconfigure(encoding='utf-8')
@@ -65,9 +66,11 @@ def build_llm_client():
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="DV Spec2Testplan Agent")
-    parser.add_argument("-i", "--input", help="待解析的 Spec Markdown 文档路径")
+    parser.add_argument("-i", "--input", help="待解析的 Spec 文档路径，支持 md/txt/docx/pdf")
     parser.add_argument("-o", "--output", help="输出 CSV 路径；不指定时自动生成")
     parser.add_argument("--backend", choices=["openai", "codex"], help="大模型后端；默认 openai，使用原版 API 配置")
+    parser.add_argument("--dump-normalized-spec", help="将输入适配后的标准 Markdown 写入指定路径，便于检查章节识别结果")
+    parser.add_argument("--normalize-only", action="store_true", help="只执行输入适配并退出，需配合 --dump-normalized-spec 使用")
     audit_group = parser.add_mutually_exclusive_group()
     audit_group.add_argument("--audit", dest="audit", action="store_const", const=True, default=None, help="开启 Critic 审计")
     audit_group.add_argument("--no-audit", dest="audit", action="store_const", const=False, help="关闭 Critic 审计")
@@ -140,7 +143,6 @@ if __name__ == "__main__":
     print("\n======================================================")
     print("🚀 欢迎使用 DV AI Agent (智能验证计划提取引擎) v0.1")
     print("======================================================")
-    client = build_llm_client()
     
     # --- 交互式获取参数 ---
     raw_input = args.input or input("📂 请输入待解析的 Spec 文档路径 (支持拖拽文件到窗口): ").strip()
@@ -150,7 +152,9 @@ if __name__ == "__main__":
         print(f"\n❌ 致命错误: 找不到文件 '{input_path}'，请检查路径是否正确！")
         sys.exit(1)
         
-    if args.audit is None:
+    if args.normalize_only:
+        ENABLE_CRITIC_AUDIT = False
+    elif args.audit is None:
         audit_choice = input("🕵️ 是否开启 Critic 审计闭环 (耗时较长，但防漏测)? [Y/n 默认开启]: ").strip().lower()
         ENABLE_CRITIC_AUDIT = (audit_choice != 'n')
     else:
@@ -163,14 +167,39 @@ if __name__ == "__main__":
     
     print(f"\n⚙️ 配置完成！")
     print(f"   - 输入文档: {input_path}")
-    print(f"   - 审计模式: {'开启 🛡️' if ENABLE_CRITIC_AUDIT else '关闭 ⚡'}")
-    print(f"   - 产物路径: {output_file}\n")
-    print("⏳ 正在唤醒 AI 引擎，请稍候...\n")
+    if args.normalize_only:
+        print("   - 输出模式: 仅标准化输入，不生成 CSV")
+    else:
+        print(f"   - 审计模式: {'开启 🛡️' if ENABLE_CRITIC_AUDIT else '关闭 ⚡'}")
+        print(f"   - 产物路径: {output_file}")
+    print()
+    print("⏳ 正在准备处理流程，请稍候...\n")
     
     # --- 开始业务流程 ---
     print(f"📄 正在加载文档: {input_path}")
-    with open(input_path, "r", encoding="utf-8") as f:
-        markdown_text = f.read()
+    loaded_spec = load_spec_as_markdown(input_path)
+    markdown_text = loaded_spec.markdown_text
+    print(
+        "   - 输入格式: "
+        f"{loaded_spec.report.source_format}, "
+        f"识别标题: {loaded_spec.report.heading_count}, "
+        f"推断标题: {loaded_spec.report.inferred_heading_count}, "
+        f"结构置信度: {loaded_spec.report.confidence}"
+    )
+    for warning in loaded_spec.report.warnings:
+        print(f"   - 结构提示: {warning}")
+    if args.dump_normalized_spec:
+        with open(args.dump_normalized_spec, "w", encoding="utf-8") as f:
+            f.write(markdown_text)
+        print(f"   - 标准化 Markdown 已写入: {args.dump_normalized_spec}")
+    if args.normalize_only:
+        if not args.dump_normalized_spec:
+            print("❌ --normalize-only 需要配合 --dump-normalized-spec 指定输出路径。")
+            sys.exit(1)
+        print("✅ 仅执行输入适配，未调用大模型。")
+        sys.exit(0)
+
+    client = build_llm_client()
     
     intro, toc = extract_toc_and_intro(markdown_text)
     

@@ -8,6 +8,10 @@
 
 用户向文档入口是 `README.md` 和 `docs/USER_MANUAL.md`。后续如果运行方式、配置项或输出列发生变化，需要同步更新这两处。
 
+当前输入适配层是 `spec_loader.py`。它支持 `.md/.markdown/.txt/.text/.docx/.pdf`，并通过 `--dump-normalized-spec` 和 `--normalize-only` 让用户检查标准化后的 Markdown 且不调用大模型。后续优化输入格式时应优先扩展 `spec_loader.py`，不要改 Maker/Critic/Schema。
+
+当前还不直接支持 URL/HTML 输入。处理网页 Spec 时，需要先把网页正文保存为 Markdown 或文本文件，再交给 `planner.py`。如果后续要支持网页，应优先在 `spec_loader.py` 增加 URL/HTML 适配，并补对应单元测试。
+
 ## 已验证结果
 
 已使用 Codex CLI 后端跑通过示例：
@@ -18,6 +22,25 @@ python planner.py --backend codex --input example_spec.md --output DV_Testplan_e
 
 结果生成 119 条测试点。质量明显优于此前过度改造版本，因为当前版本没有改动原版 Prompt、Schema、Extractor、Critic、Cluster 和 Skills 的核心生成逻辑。
 
+输入适配层补充后，已完成以下验证：
+
+```powershell
+python -m unittest discover -s tests -v
+python -m compileall -q planner.py spec_loader.py codex_client.py extractor.py cluster.py critic.py schemas.py chunker.py
+python planner.py --input example_spec.md --dump-normalized-spec _normalized_example.md --normalize-only
+python planner.py --backend codex --input example_spec.md --output DV_Testplan_input_adapter_smoke.csv --no-audit
+```
+
+其中 `tests/test_spec_loader.py` 覆盖 14 类输入样本，不调用大模型，不消耗 API 或 Codex 额度。
+
+也用 OpenTitan DMA 官方页面做过一次人工网页转 Markdown 后的端到端测试：
+
+```powershell
+python planner.py --backend codex --input _opentitan_dma_source.md --output DV_Testplan_opentitan_dma.csv --no-audit
+```
+
+结果生成 65 条测试点。`_opentitan_dma_source.md`、`_opentitan_dma_normalized.md` 和生成的 CSV 是本地测试产物，默认不要提交。
+
 ## 关键设计约束
 
 1. 默认模式必须继续使用用户提供的 API Key。
@@ -25,6 +48,7 @@ python planner.py --backend codex --input example_spec.md --output DV_Testplan_e
 3. 不要引入硬编码语义改写、评分门禁或自动去重来改写测试点内容。
 4. 不要为了 Codex CLI 修改原版 Schema。
 5. Codex CLI 后端只负责把原来的 `client.chat.completions.create(...)` 调用转接到本机 Codex。
+6. 输入格式适配只能改善文档结构，不应改写测试点语义。
 
 ## 常用命令
 
@@ -43,7 +67,8 @@ python planner.py --backend codex --input example_spec.md --output out.csv --no-
 语法检查：
 
 ```powershell
-python -m compileall -q planner.py codex_client.py extractor.py cluster.py critic.py schemas.py chunker.py
+python -m unittest discover -s tests
+python -m compileall -q planner.py spec_loader.py codex_client.py extractor.py cluster.py critic.py schemas.py chunker.py
 ```
 
 ## 后续优化建议

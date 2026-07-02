@@ -2,7 +2,7 @@
 
 这份手册面向两类用户：
 
-- 使用者：拿一份 Markdown Spec，生成测试点 CSV。
+- 使用者：拿一份 Spec，生成测试点 CSV。
 - 验证知识维护者：维护 `prompts/skills/`，让工具更懂团队的协议、接口和验证经验。
 
 如果你只是运行工具，先看第 1、2、4、5、6 节。如果你要理解项目基本架构或维护测试点生成质量，重点看第 3、7、8 节。
@@ -13,7 +13,12 @@ DV Spec2Testplan Agent 用来把硬件 Spec 转成验证测试点列表。
 
 输入：
 
-- Markdown 格式 Spec，例如 `example_spec.md`。
+- 标准 Markdown：`.md`、`.markdown`
+- 非标准文本：`.txt`、`.text`
+- Word 文档：`.docx`
+- PDF 文档：`.pdf`
+
+当前不直接支持网页 URL 或 HTML 文件。遇到网页 Spec 时，需要先保存或转换为 Markdown/文本文件，再作为输入。
 
 输出：
 
@@ -29,7 +34,8 @@ DV Spec2Testplan Agent 用来把硬件 Spec 转成验证测试点列表。
 | --- | --- |
 | 配置模型 | `.env`、`.env.example` |
 | 运行工具 | `planner.py` |
-| 准备输入 | `example_spec.md` 或自己的 Markdown Spec |
+| 输入适配 | `spec_loader.py` |
+| 准备输入 | `example_spec.md` 或自己的 md/txt/docx/pdf Spec |
 | 查看输出 | 生成的 `*.csv` |
 | 维护验证经验 | `prompts/skills/*.md` |
 | 调整全局提取纪律 | `prompts/layer1_meta.md`、`prompts/layer2_base.md` |
@@ -40,7 +46,8 @@ DV Spec2Testplan Agent 用来把硬件 Spec 转成验证测试点列表。
 
 ```mermaid
 flowchart TD
-    A["Markdown Spec"] --> B["planner.py"]
+    A["原始 Spec: md/txt/docx/pdf"] --> L["spec_loader.py 标准化"]
+    L --> B["planner.py"]
     B --> C["提取目录和前言"]
     C --> D["LLM 生成切块计划"]
     D --> E["chunker.py 物理切块"]
@@ -79,7 +86,22 @@ flowchart TD
 
 后端只负责“怎么调用模型”，不应该改变测试点生成逻辑。
 
-### 3.3 Maker
+### 3.3 Input Adapter
+
+`spec_loader.py` 是输入适配层。它负责把不同来源的 Spec 转成内部统一使用的标准 Markdown。
+
+它当前支持：
+
+- 标准 Markdown：直接读取，不重写标题。
+- 非标准 `.txt`：根据 `1.`、`1.1`、`第一章`、`一、`、Setext 标题等规则恢复 Markdown 标题。
+- `.docx`：读取 Word 标题样式、段落和表格，并转成 Markdown。
+- `.pdf`：提取页面文本，再按文本标题规则恢复 Markdown 标题。
+
+输入适配层只处理结构，不生成测试点。这样可以提升格式兼容性，同时不破坏原来的 Maker/Critic 生成质量。
+
+如果控制台提示结构置信度为 `low`，通常表示章节识别不充分。建议先用 `--dump-normalized-spec` 导出中间文件，手动确认标题结构，再决定是否需要把原始文档整理成更清晰的 Markdown。
+
+### 3.4 Maker
 
 `extractor.py` 是 Maker，负责从每个文档块中提取测试点。它会组合四层 Prompt：
 
@@ -88,13 +110,13 @@ flowchart TD
 - `prompts/skills/*.md`：按关键词动态挂载的协议经验。
 - `schemas.py`：输出 JSON 结构要求。
 
-### 3.4 Critic
+### 3.5 Critic
 
 `critic.py` 是可选审计器。开启 `--audit` 后，它会检查 Maker 是否漏掉了原文中的硬件行为。
 
 正式评审前建议开启。快速试跑可以关闭。
 
-### 3.5 Cluster
+### 3.6 Cluster
 
 `cluster.py` 负责把测试点的原始标签归类成树状目录，例如：
 
@@ -167,14 +189,26 @@ python planner.py
 python planner.py --input example_spec.md --output out.csv --audit
 ```
 
+检查输入适配结果：
+
+```powershell
+python planner.py --input spec.docx --dump-normalized-spec normalized.md --normalize-only
+```
+
+`normalized.md` 是工具真正送入后续切块和提取流程的标准 Markdown。对于 Word、PDF、非标准文本，建议先检查这个文件，确认章节识别是否合理。
+
+如果输入来自网页，请先把网页正文保存成 Markdown 或文本文件。当前命令行参数只接受本地文件路径，不接受 `https://...` 这类 URL。
+
 常用参数：
 
 | 参数 | 说明 |
 | --- | --- |
-| `--input` / `-i` | 输入 Markdown Spec 路径 |
+| `--input` / `-i` | 输入 Spec 路径，支持 md/txt/docx/pdf |
 | `--output` / `-o` | 输出 CSV 路径 |
 | `--backend openai` | 使用默认 API 后端 |
 | `--backend codex` | 使用本机 Codex CLI 后端 |
+| `--dump-normalized-spec` | 导出输入适配后的标准 Markdown |
+| `--normalize-only` | 只执行输入适配并退出，不调用大模型 |
 | `--audit` | 开启 Critic 漏测审计 |
 | `--no-audit` | 关闭 Critic，加快运行 |
 
@@ -435,3 +469,31 @@ DV_CODEX_EXE="C:\\Users\\yyou\\AppData\\Local\\OpenAI\\Codex\\bin\\codex.exe"
 - skills 是否沉淀了真实验证经验。
 
 维护 skills 时要克制。具体、可验证、能指导测试的规则才应该进入知识库。
+
+## 11. 输入适配测试集
+
+项目内的自动化测试位于 `tests/test_spec_loader.py`。它不调用大模型，不消耗 API 或 Codex 额度，只验证输入适配层。
+
+当前测试集覆盖 14 个文档样本：
+
+- 标准 Markdown。
+- `1.` / `1.1` 编号标题文本。
+- 中文 `第一章` 标题。
+- 中文 `一、` 标题。
+- Setext 标题。
+- 全大写英文标题。
+- 带列表项的文本，验证不会把普通 bullet 误判成标题。
+- 带 Markdown 表格的文本。
+- 无标题纯文本兜底。
+- Word 标题样式文档。
+- Word 纯段落编号文档。
+- Word 表格。
+- PDF 编号标题文本。
+- PDF 无标题兜底。
+
+本地验证命令：
+
+```powershell
+python -m unittest discover -s tests
+python -m compileall -q planner.py spec_loader.py codex_client.py extractor.py cluster.py critic.py schemas.py chunker.py
+```
