@@ -31,7 +31,7 @@ class RawTestpoint(BaseModel):
     raw_tag: str = Field(description="极简的特征标签，如'AXI写异常'")
     summary: str = Field(description="测试点的一句话摘要")
     details: str = Field(description="详细的测试行为描述")
-    spec_quote: str = Field(description="一字不差的原文反标")
+    spec_quote: str = Field(description="依据反标。优先填写一字不差的 Spec 原文；如果是 skill 经验补充且无合适 Spec 反标，填写 skill 规则反标。")
     
     # 👇 把原来的 section_path 这一行彻底删掉 👇
     

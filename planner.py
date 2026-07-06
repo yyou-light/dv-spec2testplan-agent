@@ -297,7 +297,7 @@ if __name__ == "__main__":
                     writer.writerow([
                         "测试点编号", "一级分类", "二级分类", "优先级", 
                         "特征标签", "测试点摘要", "详细描述", 
-                        "🔗 原文溯源 (反标)", "⚠️ 存疑 (Spec Bug?)", "💬 缺陷/二义性说明"
+                        "🔗 依据反标", "⚠️ 存疑 (Spec Bug?)", "💬 缺陷/二义性说明"
                     ])
                     for primary_idx, primary_cat in enumerate(sorted(final_tree.keys())):
                         p_match = re.search(r'\d+', primary_cat)

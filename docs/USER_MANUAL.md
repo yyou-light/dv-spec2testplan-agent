@@ -22,7 +22,7 @@ DV Spec2Testplan Agent 用来把硬件 Spec 转成验证测试点列表。
 
 输出：
 
-- CSV 测试点表，包含分类、优先级、测试点摘要、详细描述、原文反标和二义性说明。
+- CSV 测试点表，包含分类、优先级、测试点摘要、详细描述、依据反标和二义性说明。
 
 它适合生成初版 DV testplan，但不替代人工评审。验证工程师仍需要检查测试点是否有价值、是否覆盖完整、是否存在重复或误判。
 
@@ -231,14 +231,14 @@ python planner.py --input spec.docx --dump-normalized-spec normalized.md --norma
 | `特征标签` | Maker 提取的原始标签 |
 | `测试点摘要` | 一句话测试目的 |
 | `详细描述` | 测试行为、观察点或期望结果 |
-| `原文溯源` | 对应 Spec 原文，便于反查 |
+| `依据反标` | 优先对应 Spec 原文；如果测试点来自 skill 经验且没有合适 Spec 原文，则反标到 skill 编号规则 |
 | `存疑` | Spec 可能存在二义性时标记 |
 | `缺陷/二义性说明` | 需要设计或架构澄清的问题 |
 
 人工 review 时不要只看行数。更重要的是：
 
 - 测试点是否有明确验证意图。
-- 是否能反查到原文或明确的隐式规则。
+- 是否能反查到 Spec 原文或明确的 skill 规则。
 - 是否覆盖核心路径、异常路径、边界条件和真实使用场景。
 - “存疑”是否真的指向需要澄清的问题。
 
@@ -267,10 +267,10 @@ prompts/skills/backpressure.md
 触发这个 skill 的关键词
 
 # explicit_rules
-原文明确写到时必须提取的规则
+- AXI-EXP-001: 原文明确写到时必须提取的规则
 
 # implicit_rules
-即使原文没有直接写明，也应基于验证经验补充的测试点
+- AXI-IMP-001: 即使原文没有直接写明，也应基于验证经验补充的测试点
 ```
 
 ### 7.1 keywords 怎么写
@@ -305,8 +305,8 @@ axi, awvalid, arvalid, wvalid, rvalid, bvalid, awready, wready
 
 ```markdown
 # explicit_rules
-1. 4KB 边界：如果原文描述 AXI burst 不允许跨越 4KB 边界，必须提取合法边界、跨界非法和错误响应测试点。
-2. 非对齐访问：如果原文描述地址必须 word 对齐，必须提取对齐访问和非对齐访问测试点。
+- AXI-EXP-001: 4KB 边界：如果原文描述 AXI burst 不允许跨越 4KB 边界，必须提取合法边界、跨界非法和错误响应测试点。
+- AXI-EXP-002: 非对齐访问：如果原文描述地址必须 word 对齐，必须提取对齐访问和非对齐访问测试点。
 ```
 
 不要写：
@@ -331,9 +331,9 @@ axi, awvalid, arvalid, wvalid, rvalid, bvalid, awready, wready
 
 ```markdown
 # implicit_rules
-1. 背靠背传输：当模块支持 AXI burst 或连续访问时，补充连续背靠背读写测试点。
-2. 通道反压：覆盖 AW/W/B/AR/R 各通道 ready 拉低和恢复后的数据不丢不重。
-3. AXI ID 覆盖：如果接口包含 ID，覆盖所有支持 ID 的读写事务。
+- AXI-IMP-001: 背靠背传输：当模块支持 AXI burst 或连续访问时，补充连续背靠背读写测试点。
+- AXI-IMP-002: 通道反压：覆盖 AW/W/B/AR/R 各通道 ready 拉低和恢复后的数据不丢不重。
+- AXI-IMP-003: AXI ID 覆盖：如果接口包含 ID，覆盖所有支持 ID 的读写事务。
 ```
 
 注意：
@@ -342,7 +342,34 @@ axi, awvalid, arvalid, wvalid, rvalid, bvalid, awready, wready
 - 只写团队确实认可的验证经验。
 - 不要把不确定的设计假设写成隐式规则。
 
-### 7.4 新增一个 skill 的步骤
+### 7.4 skill 编号和依据反标
+
+每条规则建议使用稳定编号：
+
+```text
+协议缩写-规则类型-三位序号
+```
+
+示例：
+
+```markdown
+- AXI-EXP-001: 4KB边界：提取 AXI Burst 传输跨越 4KB 地址边界时的报错或切分逻辑测试点。
+- AXI-IMP-004: 通道反压：确保各通道在正常工作情况下，都触发过反压(ready拉低)。
+```
+
+编号的用途是让 CSV 反标可 review。工具生成测试点时遵循：
+
+- 如果 Spec 里有能直接支撑测试点的句子，优先反标 Spec 原文。
+- 如果测试点来自 skill 经验，且当前 Spec 没有合适原文支撑，则反标 skill 规则。
+- 不应为了凑 Spec 反标，引用只包含弱相关关键词但不能说明测试意图的原文。
+
+Skill 反标格式示例：
+
+```text
+[SKILL: axi.md#AXI-IMP-004] 通道反压：确保各通道在正常工作情况下，都触发过反压(ready拉低)。
+```
+
+### 7.5 新增一个 skill 的步骤
 
 假设要新增 FIFO 相关经验：
 
@@ -359,12 +386,12 @@ prompts/skills/fifo.md
 fifo, full, empty, almost_full, almost_empty
 
 # explicit_rules
-1. 如果原文定义 FIFO full 行为，必须提取写 full 边界和 full 后继续写的异常测试点。
-2. 如果原文定义 FIFO empty 行为，必须提取读 empty 边界和 empty 后继续读的异常测试点。
+- FIFO-EXP-001: 如果原文定义 FIFO full 行为，必须提取写 full 边界和 full 后继续写的异常测试点。
+- FIFO-EXP-002: 如果原文定义 FIFO empty 行为，必须提取读 empty 边界和 empty 后继续读的异常测试点。
 
 # implicit_rules
-1. 指针回卷：覆盖读写指针接近最大值并回卷后的 full/empty 判断。
-2. 同拍读写：覆盖同一周期读写同时发生时的计数和数据顺序。
+- FIFO-IMP-001: 指针回卷：覆盖读写指针接近最大值并回卷后的 full/empty 判断。
+- FIFO-IMP-002: 同拍读写：覆盖同一周期读写同时发生时的计数和数据顺序。
 ```
 
 3. 用包含 FIFO 章节的 Spec 试跑：
@@ -377,7 +404,7 @@ python planner.py --input your_fifo_spec.md --output fifo_testplan.csv --no-audi
 
 - 是否出现 FIFO 相关测试点。
 - 是否有无意义脑补。
-- 原文反标是否能支撑测试点。
+- 依据反标是否能说明测试点来自 Spec 原文还是 skill 经验。
 
 5. 正式生成时再开启审计：
 
@@ -385,13 +412,13 @@ python planner.py --input your_fifo_spec.md --output fifo_testplan.csv --no-audi
 python planner.py --input your_fifo_spec.md --output fifo_testplan_audit.csv --audit
 ```
 
-### 7.5 修改 skill 后怎么判断有没有改好
+### 7.6 修改 skill 后怎么判断有没有改好
 
 看三件事：
 
 - 命中是否正确：该触发时触发，不该触发时不触发。
 - 输出是否具体：测试点能看出测什么、为什么测。
-- 反标是否可信：显式规则来自原文，隐式规则至少能从当前上下文找到触发依据。
+- 依据反标是否可信：优先反标 Spec；Spec 不合适时应反标到具体 skill 编号。
 
 不要用“输出越多越好”判断。skills 的目标是增加有效覆盖，不是制造行数。
 

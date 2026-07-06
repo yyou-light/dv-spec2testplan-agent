@@ -12,6 +12,8 @@
 
 当前还不直接支持 URL/HTML 输入。处理网页 Spec 时，需要先把网页正文保存为 Markdown 或文本文件，再交给 `planner.py`。如果后续要支持网页，应优先在 `spec_loader.py` 增加 URL/HTML 适配，并补对应单元测试。
 
+当前 Maker 的依据反标规则是：Spec 直接支撑优先；如果测试点来自 skill 经验且当前 Chunk 没有合适 Spec 原文，则使用 `[SKILL: file.md#RULE-ID] 规则内容` 作为反标。Critic 仍只做漏测审计，不做额外质量评分。
+
 ## 已验证结果
 
 已使用 Codex CLI 后端跑通过示例：
@@ -49,6 +51,7 @@ python planner.py --backend codex --input _opentitan_dma_source.md --output DV_T
 4. 不要为了 Codex CLI 修改原版 Schema。
 5. Codex CLI 后端只负责把原来的 `client.chat.completions.create(...)` 调用转接到本机 Codex。
 6. 输入格式适配只能改善文档结构，不应改写测试点语义。
+7. Skills 规则应保留稳定编号，便于 CSV 反标 review。不要把 skill 经验覆盖能力收窄成“Spec 没写就不测”。
 
 ## 常用命令
 
