@@ -77,7 +77,9 @@ def build_llm_client():
     )
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="DV Spec2Testplan Agent")
+    parser = argparse.ArgumentParser(
+        description="DV Spec2Testplan Agent - 验证测试点生成与分解"
+    )
     parser.add_argument("-i", "--input", help="待解析的 Spec 文档路径，支持 md/txt/docx/pdf")
     parser.add_argument("-o", "--output", help="输出 CSV 路径；不指定时自动生成")
     parser.add_argument("--backend", choices=["openai", "codex"], help="大模型后端；默认 openai，使用原版 API 配置")
@@ -360,7 +362,7 @@ if __name__ == "__main__":
         os.environ["DV_LLM_BACKEND"] = args.backend
 
     print("\n======================================================")
-    print("🚀 欢迎使用 DV AI Agent (智能验证计划提取引擎) v0.1")
+    print("🚀 欢迎使用 DV Spec2Testplan Agent (验证测试点生成与分解) v0.1")
     print("======================================================")
     
     # --- 交互式获取参数 ---
