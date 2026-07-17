@@ -5,14 +5,20 @@ from extractor import route_dynamic_skills
 # =====================================================================
 # [Step 6] Checker: 找茬大模型 (The AI Critic)
 # =====================================================================
-def audit_extracted_testpoints(client, model_name: str, chunk: dict, extracted_points: list) -> AuditReport:
+def audit_extracted_testpoints(
+    client,
+    model_name: str,
+    chunk: dict,
+    extracted_points: list,
+    skill_prompt: str | None = None,
+) -> AuditReport:
     schema_json = AuditReport.model_json_schema()
     
     # 提取所有已被 Maker 覆盖的原文句子
     existing_quotes = [tp.spec_quote for tp in extracted_points]
     
     # 🌟 核心对齐：拿取和 Extractor 一模一样的考纲
-    aligned_layer_3 = route_dynamic_skills(chunk['content'])
+    aligned_layer_3 = skill_prompt if skill_prompt is not None else route_dynamic_skills(chunk['content'])
     
     system_prompt = f"""
     【角色设定】你是一个极其挑剔的资深数字IC验证架构师 (DV Architect)。

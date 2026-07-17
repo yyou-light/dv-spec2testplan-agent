@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+.run_logs/
 
 # 环境变量 (最重要的一行！)
 .env
@@ -10,3 +11,6 @@ venv/
 # 测试输出文档
 *.csv
 *.xlsx
+*.raw.json
+*.atomicity.json
+*.classification.json

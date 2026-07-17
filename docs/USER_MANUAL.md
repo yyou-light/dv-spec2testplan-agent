@@ -48,20 +48,27 @@ DV Spec2Testplan Agent 用来把硬件 Spec 转成验证测试点列表。
 flowchart TD
     A["原始 Spec: md/txt/docx/pdf"] --> L["spec_loader.py 标准化"]
     L --> B["planner.py"]
-    B --> C["提取目录和前言"]
-    C --> D["LLM 生成切块计划"]
+    B --> C["LLM 读取完整 Spec，建立全局事实表"]
+    C --> D["生成切块计划"]
     D --> E["chunker.py 物理切块"]
-    E --> F["extractor.py / Maker 提取测试点"]
+    E --> R["skill_router.py 全局分配 Skill 规则"]
+    R --> F
+    F["extractor.py / Maker 提取测试点"]
     F --> G{"是否开启 --audit"}
     G -- 是 --> H["critic.py / Critic 查漏"]
     H --> F
-    G -- 否 --> I["cluster.py 标签归类"]
+    G -- 否 --> I["保存分类前 raw.json"]
     H --> I
-    I --> J["导出 CSV"]
-    K["prompts/skills/*.md"] --> F
+    I --> M["cluster.py 全量原子性台账"]
+    M --> N["六类语义分类与二级目录规划"]
+    N --> O{"二级目录是否准确匹配"}
+    O -- 否 --> P["扩展目录并定向重分类"]
+    P --> O
+    O -- 是 --> J["导出 CSV 与审计 JSON"]
+    K["prompts/skills/*.md"] --> R
 ```
 
-从用户角度看，`prompts/skills/` 是最重要的可维护部分。它决定模型在看到 AXI、SRAM、ready、反压等关键词时，会额外带上哪些验证经验。
+从用户角度看，`prompts/skills/` 是最重要的可维护部分。工具先从完整 Spec 确认 AXI、SRAM、ready、反压等协议或接口特征，再把对应验证经验分配到最合适的 Chunk。
 
 ## 3. 项目基本架构
 
@@ -70,8 +77,9 @@ flowchart TD
 入口文件是 `planner.py`。它负责：
 
 - 读取 Spec。
-- 提取目录和前言。
-- 调用大模型生成切块计划。
+- 调用大模型阅读完整 Spec，建立带原文证据的全局事实表。
+- 生成切块计划，并把完整全局事实传给每个 Chunk。
+- 调用全局 Skill 路由器分配规则。
 - 调用 Maker/Critic/Cluster。
 - 导出 CSV。
 
@@ -107,18 +115,36 @@ flowchart TD
 
 - `prompts/layer1_meta.md`：全局角色和提取纪律。
 - `prompts/layer2_base.md`：通用验证原则和场景推演要求。
-- `prompts/skills/*.md`：按关键词动态挂载的协议经验。
+- `prompts/skills/*.md`：先由程序识别文档级候选，再由全局路由器分配到合适 Chunk 的协议经验。
 - `schemas.py`：输出 JSON 结构要求。
 
-### 3.5 Critic
+### 3.5 Skill Router
+
+`skill_router.py` 在物理切块完成后工作。它先根据完整 Spec 识别 AXI、SRAM、反压等候选 Skills，再让大模型结合全局事实和全部 Chunk，把每条规则分配给最合适的 Chunk。
+
+它遵循两个原则：
+
+- Spec 确认存在某类接口后，该接口的常规 DV 经验仍应得到覆盖，不要求 Spec 逐字写出。
+- 同一规则默认只交给一个主要 Chunk；确有不同验证对象时才允许分配给多个 Chunk。
+
+程序会校验所有候选规则是否都已分配，以及目标 Chunk 是否真实存在。漏分配或错误分配会明确报错，不会静默继续。
+
+### 3.6 Critic
 
 `critic.py` 是可选审计器。开启 `--audit` 后，它会检查 Maker 是否漏掉了原文中的硬件行为。
 
 正式评审前建议开启。快速试跑可以关闭。
 
-### 3.6 Cluster
+### 3.7 Cluster
 
-`cluster.py` 负责把测试点的原始标签归类成树状目录，例如：
+`cluster.py` 不再只根据原始标签做关键词映射。它读取每条测试点的摘要、详细描述、依据反标、来源 Chunk 和完整 Spec 全局事实，完成四步处理：
+
+1. 为每个内部测试点 ID 建立原子性台账，明确记录“拆分”或“保留”。
+2. 在固定六个一级目录下规划有限、可复用的二级目录。
+3. 逐点输出合法性、主验证意图、结果关注域、错误机制、corner 触发条件、分类理由和目录匹配依据。
+4. 如果现有二级目录不准确，扩展 taxonomy，只重分受影响测试点。
+
+固定一级目录是：
 
 - 接口类
 - 功能类
@@ -126,6 +152,21 @@ flowchart TD
 - 异常类
 - 上报类
 - corner类
+
+六类业务边界如下：
+
+| 一级目录 | 业务含义 |
+| --- | --- |
+| 接口类 | 信号、位宽、通道、握手和协议规定的正常接口交互 |
+| 功能类 | Spec 支持范围内的正常功能，包括合法最小值、最大值和支持组合 |
+| 场景类 | 多步骤、多接口或软件与硬件协作的完整流程 |
+| 异常类 | 非法输入、不支持操作、越界、协议违规和错误响应 |
+| 上报类 | 中断、状态、告警和其他可观察上报机制 |
+| corner类 | 资源饱和、长停顿恢复、资源冲突、关键状态转换、多个合法极限条件叠加或多个独立错误机制的优先级交互 |
+
+合法最高地址、合法最大 Burst、所有支持 ID 和合法 size/length 遍历不是 corner。随机反压是正常协议行为；长时间反压解除后的恢复才可能是 corner。首地址合法但后续 Burst beat 越界，主目的仍是单一地址错误处理，应归异常；同一请求同时命中非对齐和越界并验证错误优先级，才属于多错误机制交互的 corner。
+
+原子性审查也不是机械拆句。测试点同时包含正常完成和错误响应，并且能按支持/不支持、范围内/范围外等客观刺激域切分时才拆分。即使具体支持边界、错误码或实现策略待澄清，只要刺激域客观可分，仍应拆开并在替代测试点中保留歧义；同一刺激究竟报错、切分还是由上游禁止等未决选择则保留为一条。每个输入 ID 必须在台账中出现一次，程序会拒绝漏审、重复、误拆和满足资格却未拆的结果。
 
 ## 4. 安装和配置
 
@@ -151,7 +192,14 @@ copy .env.example .env
 DV_LLM_API_KEY="your_api_key_here"
 DV_LLM_BASE_URL="https://api.deepseek.com"
 DV_LLM_MODEL_NAME="deepseek-chat"
+DV_SKILL_ROUTER="semantic"
+DV_ATOMICITY_BATCH_SIZE="40"
+DV_CLASSIFICATION_BATCH_SIZE="40"
+DV_STRUCTURED_RETRY="2"
+DV_CATEGORY_REPAIR_ROUNDS="2"
 ```
+
+后四项通常保持默认值：分别控制原子性审查批次、分类批次、结构化输出纠正次数和二级目录自动扩展轮数。大文档或上下文较小的模型可以适当减小批次大小。
 
 ### 4.2 可选 Codex CLI 模式
 
@@ -175,6 +223,8 @@ DV_CODEX_IGNORE_USER_CONFIG="1"
 
 Codex CLI 不是默认模式，避免影响已有 API 用户，也避免无意消耗用户自己的 Codex 额度。
 
+`DV_SKILL_ROUTER="semantic"` 是默认全局语义路由。需要兼容旧的逐 Chunk 路由时可设置为 `keyword`；该模式仍使用安全词边界，不会把普通单词内部的 `ram`、`ready` 当成协议关键词。
+
 ## 5. 怎么运行
 
 交互式运行：
@@ -195,6 +245,14 @@ python planner.py --input example_spec.md --output out.csv --audit
 python planner.py --input spec.docx --dump-normalized-spec normalized.md --normalize-only
 ```
 
+只重跑原子性审查和分类，不重复运行 Maker/Critic：
+
+```powershell
+python planner.py --backend codex --classify-only --input out.raw.json --output out_reclassified.csv
+```
+
+`out.raw.json` 由完整运行自动生成。这个方式适合修改分类逻辑、六类业务定义或二级目录规则后做快速回归，也方便比较分类前测试点是否完全一致。
+
 `normalized.md` 是工具真正送入后续切块和提取流程的标准 Markdown。对于 Word、PDF、非标准文本，建议先检查这个文件，确认章节识别是否合理。
 
 如果输入来自网页，请先把网页正文保存成 Markdown 或文本文件。当前命令行参数只接受本地文件路径，不接受 `https://...` 这类 URL。
@@ -209,6 +267,8 @@ python planner.py --input spec.docx --dump-normalized-spec normalized.md --norma
 | `--backend codex` | 使用本机 Codex CLI 后端 |
 | `--dump-normalized-spec` | 导出输入适配后的标准 Markdown |
 | `--normalize-only` | 只执行输入适配并退出，不调用大模型 |
+| `--dump-raw-testpoints` | 指定分类前测试点 JSON 的保存路径 |
+| `--classify-only` | 把 `--input` 当作 raw testpoint JSON，只重跑分类和导出 |
 | `--audit` | 开启 Critic 漏测审计 |
 | `--no-audit` | 关闭 Critic，加快运行 |
 
@@ -234,6 +294,28 @@ python planner.py --input spec.docx --dump-normalized-spec normalized.md --norma
 | `依据反标` | 优先对应 Spec 原文；如果测试点来自 skill 经验且没有合适 Spec 原文，则反标到 skill 编号规则 |
 | `存疑` | Spec 可能存在二义性时标记 |
 | `缺陷/二义性说明` | 需要设计或架构澄清的问题 |
+| `内部测试点ID` | 分类前后的稳定审计 ID；拆分项增加 `-S1`、`-S2` 后缀 |
+| `分类置信度` | `high`、`medium`、`low` |
+| `分类依据` | 结合完整测试意图和 Spec 合法范围给出的分类理由 |
+| `混合意图说明` | 正常情况下为空；仍有混合意图时流程会停止导出 |
+| `合法性判定` | 合法正常、已定义错误、非法/不支持或 Spec 待澄清 |
+| `主验证意图` | 决定一级目录的结构化意图 |
+| `结果关注域` | 最终要确认的是正常行为、单一错误、完整场景、上报、资源/状态交互还是多错误交互 |
+| `错误机制` | 单一异常的主要错误机制，或多错误 Corner 中至少两个相互独立的错误机制 |
+| `Corner触发条件` | 资源饱和、长停顿恢复、资源冲突、状态转换、多合法极限叠加或多错误优先级 |
+| `Corner判定依据` | 只有 corner 项填写的可核查证据 |
+| `二级目录匹配依据` | 当前测试点为何适合该二级目录 |
+
+假设主输出是 `out.csv`，程序还会自动生成：
+
+| 文件 | 内容 |
+| --- | --- |
+| `out.raw.json` | Maker/Critic 完成后、分类前的测试点和全局上下文 |
+| `out.atomicity.json` | 每个原始 ID 的拆分/保留台账和资格判断 |
+| `out.atomic.raw.json` | 原子性审查后的最终分类输入 |
+| `out.classification.json` | 最终二级目录、逐点分类、合法性和 corner 证据 |
+
+这些 JSON 是审计和复跑产物。普通用户不需要修改；排查“为什么被拆”“为什么进 corner”“为什么属于这个二级目录”时，应优先查看对应文件，而不是猜测 Prompt。
 
 人工 review 时不要只看行数。更重要的是：
 
@@ -241,6 +323,10 @@ python planner.py --input spec.docx --dump-normalized-spec normalized.md --norma
 - 是否能反查到 Spec 原文或明确的 skill 规则。
 - 是否覆盖核心路径、异常路径、边界条件和真实使用场景。
 - “存疑”是否真的指向需要澄清的问题。
+- 合法端点是否仍在功能类，非法越界是否在异常类。
+- corner 是否有明确触发条件和证据，而不是只因为出现“最大、边界、交叉”等字样。
+- `结果关注域` 是否符合测试点真正想确认的结果；单一错误机制不得包装成资源或状态交互。
+- 二级目录名称是否与测试点主意图一致。
 
 ## 7. Skills 在哪里，怎么维护
 
@@ -479,6 +565,24 @@ DV_CODEX_EXE="C:\\Users\\yyou\\AppData\\Local\\OpenAI\\Codex\\bin\\codex.exe"
 
 通常是 Windows 控制台编码问题，不代表 CSV 文件损坏。CSV 使用 `utf-8-sig` 写入，Excel 通常可以正常识别。
 
+### 只想调整分类，不想重新跑 Maker/Critic
+
+使用完整运行生成的 `*.raw.json`：
+
+```powershell
+python planner.py --backend codex --classify-only --input out.raw.json --output out_reclassified.csv
+```
+
+分类前测试点和反标保持不变，便于只比较目录、合法性和 corner 判定。
+
+### 为什么合法最大值没有放进 corner
+
+合法最大值仍是 Spec 支持范围内的正常功能。corner 需要真实的资源饱和、长停顿恢复、资源冲突、关键状态转换或多个合法极限条件叠加。单一非法越界则属于异常。
+
+### 为什么没有 `5.上报类`
+
+一级目录含义固定，但当前 Spec 不一定包含中断、状态、告警等真正的上报机制。某个一级目录可以为空；普通 AXI OKAY/SLVERR 响应不会为了填满目录而被强行归入上报类。
+
 ## 10. 推荐工作流
 
 维护一个协议 skill 时，建议按这个顺序：
@@ -497,11 +601,11 @@ DV_CODEX_EXE="C:\\Users\\yyou\\AppData\\Local\\OpenAI\\Codex\\bin\\codex.exe"
 
 维护 skills 时要克制。具体、可验证、能指导测试的规则才应该进入知识库。
 
-## 11. 输入适配测试集
+## 11. 自动化测试集
 
-项目内的自动化测试位于 `tests/test_spec_loader.py`。它不调用大模型，不消耗 API 或 Codex 额度，只验证输入适配层。
+项目内自动化测试位于 `tests/`，不调用真实大模型，不消耗 API 或 Codex 额度。除输入适配外，还覆盖完整 Spec 全局事实、Skill 路由、六类分类、原子性台账、结构化纠错、二级目录扩展和编号连续性。
 
-当前测试集覆盖 14 个文档样本：
+其中输入适配测试覆盖 14 个文档样本：
 
 - 标准 Markdown。
 - `1.` / `1.1` 编号标题文本。
@@ -518,9 +622,11 @@ DV_CODEX_EXE="C:\\Users\\yyou\\AppData\\Local\\OpenAI\\Codex\\bin\\codex.exe"
 - PDF 编号标题文本。
 - PDF 无标题兜底。
 
+分类相关单元测试还覆盖：合法最高地址归功能、非法越界归异常、单一跨界错误不能包装成 corner、多错误优先级保留 corner、真实多约束交互保留 corner、随机反压不误判 corner、需求未决但刺激域可分时仍纠正漏拆、原子性误拆自动纠正、未知二级目录自动扩展，以及空目录不造成编号跳号。
+
 本地验证命令：
 
 ```powershell
 python -m unittest discover -s tests
-python -m compileall -q planner.py spec_loader.py codex_client.py extractor.py cluster.py critic.py schemas.py chunker.py
+python -m compileall -q planner.py spec_loader.py codex_client.py extractor.py skill_router.py cluster.py critic.py schemas.py chunker.py
 ```
